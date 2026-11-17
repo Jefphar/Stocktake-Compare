@@ -1,22 +1,19 @@
 name: Build Windows exe
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
-jobs:
-  build:
-    runs-on: windows-latest
-defaults:
-  run:
-    working-directory: stocktake-app
-steps:
-- uses: actions/checkout@v4
-- uses: actions/setup-node@v4
-with:
-  node-version: 20
-- run: npm install
-- run: npm run build
-- uses: actions/upload-artifact@v4
-with:
-  name: Stocktake-Compare-exe
-  path: stocktake-app/dist/Stocktake-Compare.exe
+     branches: [main]
+    workflow_dispatch:
+  jobs:
+    build:
+      runs-on: windows-latest
+      defaults:
+        run:
+          working-directory: stoscktake-app
+      steps:
+        -uses: actions/checkout@v4
+        -uses: actions/setup-node@v4
+         with: { node-version: 20 }
+        -run: npm isntall
+        -run: npm run build
+        -uses: actions/upload-artifact@v4
+         with: { name: Stocktake-Compare-exe, path: stocktake-app/dist/Stocktake-Compare.exe }
