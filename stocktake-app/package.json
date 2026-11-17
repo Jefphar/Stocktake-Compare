@@ -1,0 +1,28 @@
+{
+  "name": "stocktake-compare",
+  "version": "1.0.0",
+  "description": "Stocktake Compare",
+  "main": "main.js",
+  "author": "Stocktake",
+  "scripts": {
+    "prebuild": "node scripts/copy-lib.js",
+    "start": "node scripts/copy-lib.js && electron .",
+    "build": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "xlsx-js-style": "1.2.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.stocktake.compare",
+    "productName": "Stocktake Compare",
+    "files": ["main.js", "index.html", "xlsx.bundle.js"],
+    "win": {
+      "target": "portable",
+      "artifactName": "Stocktake-Compare.exe"
+    }
+  }
+}

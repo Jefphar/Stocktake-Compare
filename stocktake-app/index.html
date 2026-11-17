@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stocktake Compare</title>
+<script src="xlsx.bundle.js"></script>
+<style>
+:root{--bg:#EEF2F1;--ink:#17262B;--mute:#5B6B6F;--line:#C9D4D2;--brand:#0B6B5C;--yel:#FFF200;--red:#F6C4C4;--grn:#C4E8C8;--card:#fff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:760px;margin:0 auto;padding:40px 20px 64px}
+h1{font-size:2rem;letter-spacing:-.02em;margin:0 0 6px}
+.lede{color:var(--mute);margin:0 0 28px;max-width:60ch}
+.drops{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.drop{background:var(--card);border:2px dashed var(--line);border-radius:6px;padding:18px;cursor:pointer;display:block;transition:border-color .15s}
+.drop:hover,.drop:focus-within{border-color:var(--brand)}
+.drop.ok{border-style:solid;border-color:var(--brand)}
+.drop b{display:block;font-size:1.05rem}
+.drop span{display:block;color:var(--mute);font-size:.9rem;overflow-wrap:anywhere}
+.drop input{position:absolute;opacity:0;pointer-events:none}
+.opts{margin:18px 0 0}
+select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:4px;margin-left:6px}
+button{font:inherit;font-weight:600;background:var(--brand);color:#fff;border:0;border-radius:4px;padding:12px 22px;cursor:pointer;margin-top:20px}
+button:disabled{background:#9DB3AF;cursor:not-allowed}
+button:focus-visible,select:focus-visible{outline:3px solid #F2A900;outline-offset:2px}
+#msg{margin:14px 0 0;min-height:1.5em;color:#9A2B2B}
+#result{margin-top:28px;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:22px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:0 0 18px}
+.stat{padding:10px 12px;border-left:6px solid var(--line)}
+.stat b{display:block;font-size:1.6rem;line-height:1.1}
+.stat.c{border-color:var(--yel)}.stat.r{border-color:#E08A8A}.stat.a{border-color:#7CC785}
+.dl{display:flex;flex-wrap:wrap;gap:10px}
+.dl button{margin:0}
+.key{color:var(--mute);font-size:.9rem;margin:16px 0 0}
+.key i{display:inline-block;width:14px;height:14px;vertical-align:-2px;margin:0 4px 0 10px;border:1px solid #bbb}
+.key i:first-child{margin-left:0}
+@media(max-width:560px){.drops{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>Stocktake Compare</h1>
+<p class="lede">Pick the Before and After stock lists. Rows are matched by PLU, and every difference is highlighted in both files, ready to download.</p>
+
+<div class="drops">
+  <label class="drop" id="dropB"><b>Before stocktake</b><span id="nameB">Choose an .xls or .xlsx file</span><input type="file" id="fileB" accept=".xls,.xlsx,.xlsm,.csv"></label>
+  <label class="drop" id="dropA"><b>After stocktake</b><span id="nameA">Choose an .xls or .xlsx file</span><input type="file" id="fileA" accept=".xls,.xlsx,.xlsm,.csv"></label>
+</div>
+
+<div class="opts" id="opts" hidden>
+  <label>Match rows by column <select id="key"></select></label>
+</div>
+
+<button id="go" disabled>Compare and highlight</button>
+<p id="msg" role="status"></p>
+
+<section id="result" hidden>
+  <div class="stats" id="stats"></div>
+  <div class="dl">
+    <button id="dlR">Download discrepancy report</button>
+    <button id="dlB">Download Before (highlighted)</button>
+    <button id="dlA">Download After (highlighted)</button>
+  </div>
+  <p class="key"><i style="background:var(--yel)"></i>Changed cell<i style="background:var(--red)"></i>Only in Before (removed)<i style="background:var(--grn)"></i>Only in After (added)</p>
+  <p class="key">The report lists every highlighted row with Before and After side by side and an empty Recount column. It is also added as a sheet to both highlighted files, along with a Differences sheet.</p>
+</section>
+</main>
+
+<script>
+const S = {B:null, A:null};
+const $ = id => document.getElementById(id);
+const norm = s => String(s).trim().toLowerCase();
+let out = null, RPT = null;
+
+function load(side, file){
+  if(!file) return;
+  $('msg').textContent = '';
+  file.arrayBuffer().then(buf => {
+    const wb = XLSX.read(buf, {type:'array'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:true, blankrows:true});
+    let h = rows.findIndex((r,i) => i < 25 && r.some(c => /plu/i.test(String(c))));
+    if(h < 0) h = 0;
+    S[side] = {name:file.name, rows, h};
+    $('name'+side).textContent = file.name + ' (' + (rows.length - h - 1) + ' rows)';
+    $('drop'+side).classList.add('ok');
+    afterLoad();
+  }).catch(() => { $('msg').textContent = 'Could not read ' + file.name + '. Save it as .xlsx and try again.'; });
+}
+
+function afterLoad(){
+  const ready = S.B && S.A;
+  $('go').disabled = !ready;
+  $('result').hidden = true;
+  if(!ready) return;
+  const hdr = S.B.rows[S.B.h].map(String).filter(x => x.trim() !== '');
+  const sel = $('key');
+  sel.innerHTML = '';
+  hdr.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); });
+  const guess = hdr.find(n => /plu/i.test(n));
+  if(guess) sel.value = guess;
+  $('opts').hidden = false;
+}
+
+function records(side, keyName){
+  const {rows, h} = S[side];
+  const hdr = rows[h].map(norm);
+  const kc = hdr.indexOf(norm(keyName));
+  const seen = {}, map = new Map(), dups = new Set();
+  if(kc < 0) return {map, dups, hdr, missing:true};
+  for(let i = h + 1; i < rows.length; i++){
+    const r = rows[i];
+    if(r.every(c => String(c).trim() === '')) continue;
+    const k = String(r[kc]).trim();
+    if(k === '') continue;
+    seen[k] = (seen[k] || 0) + 1;
+    if(seen[k] > 1) dups.add(k);
+    map.set(k + '\u0000' + seen[k], {k, i});
+  }
+  return {map, dups, hdr, kc};
+}
+
+function same(a, b){
+  const x = String(a).trim(), y = String(b).trim();
+  if(x === y) return true;
+  const nx = Number(x), ny = Number(y);
+  return x !== '' && y !== '' && !isNaN(nx) && !isNaN(ny) && Math.abs(nx - ny) < 1e-9;
+}
+
+function build(side, cells, wholeRows, fill, diffs){
+  const {rows, h} = S[side];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const width = Math.max(1, ...rows.map(r => r.length));
+  const paint = (r, c, rgb) => {
+    const ref = XLSX.utils.encode_cell({r, c});
+    if(!ws[ref]) ws[ref] = {t:'s', v:''};
+    ws[ref].s = {fill:{patternType:'solid', fgColor:{rgb}}};
+  };
+  wholeRows.forEach(r => { for(let c = 0; c < width; c++) paint(r, c, fill); });
+  cells.forEach(([r, c]) => paint(r, c, 'FFF200'));
+  for(let c = 0; c < width; c++){
+    const ref = XLSX.utils.encode_cell({r:h, c});
+    if(ws[ref]) ws[ref].s = {font:{bold:true}, fill:{patternType:'solid', fgColor:{rgb:'D9E2E0'}}};
+  }
+  const w = [];
+  for(let c = 0; c < width; c++){
+    let m = 8;
+    rows.forEach(r => { m = Math.max(m, Math.min(40, String(r[c] === undefined ? '' : r[c]).length + 2)); });
+    w.push({wch:m});
+  }
+  ws['!cols'] = w;
+  const ds = XLSX.utils.aoa_to_sheet([['Status', 'Key', 'Column', 'Before', 'After'], ...diffs]);
+  for(let c = 0; c < 5; c++){ const ref = XLSX.utils.encode_cell({r:0, c}); ds[ref].s = {font:{bold:true}, fill:{patternType:'solid', fgColor:{rgb:'D9E2E0'}}}; }
+  ds['!cols'] = [{wch:10}, {wch:16}, {wch:24}, {wch:24}, {wch:24}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Stock list');
+  XLSX.utils.book_append_sheet(wb, ds, 'Differences');
+  XLSX.utils.book_append_sheet(wb, makeReport(), 'Discrepancy Report');
+  return wb;
+}
+
+function paintCell(ws, r, c, rgb){
+  const ref = XLSX.utils.encode_cell({r, c});
+  if(!ws[ref]) ws[ref] = {t:'s', v:''};
+  ws[ref].s = {fill:{patternType:'solid', fgColor:{rgb}}};
+}
+
+function makeReport(){
+  const {entries, key, kcB, kcA} = RPT;
+  const hb = S.B.rows[S.B.h], ha = S.A.rows[S.A.h];
+  const colsB = [], colsA = [];
+  hb.forEach((n, j) => { if(String(n).trim() !== '' && j !== kcB) colsB.push(j); });
+  ha.forEach((n, j) => { if(String(n).trim() !== '' && j !== kcA) colsA.push(j); });
+  const nB = colsB.length, nA = colsA.length, total = 3 + nB + nA;
+  const grp = Array(total).fill('');
+  grp[2] = 'BEFORE: ' + S.B.name;
+  grp[2 + nB] = 'AFTER: ' + S.A.name;
+  const head = ['Status', key, ...colsB.map(j => String(hb[j])), ...colsA.map(j => String(ha[j])), 'Recount'];
+  const body = entries.map(e => [e.s, e.k,
+    ...colsB.map(j => e.bi != null ? S.B.rows[e.bi][j] : ''),
+    ...colsA.map(j => e.ai != null ? S.A.rows[e.ai][j] : ''), '']);
+  const ws = XLSX.utils.aoa_to_sheet([grp, head, ...body]);
+  const hdrStyle = {font:{bold:true}, fill:{patternType:'solid', fgColor:{rgb:'D9E2E0'}}};
+  for(let c = 0; c < total; c++){
+    [0, 1].forEach(r => {
+      const ref = XLSX.utils.encode_cell({r, c});
+      if(!ws[ref]) ws[ref] = {t:'s', v:''};
+      ws[ref].s = hdrStyle;
+    });
+  }
+  paintCell(ws, 1, total - 1, 'BDD7EE');
+  ws[XLSX.utils.encode_cell({r:1, c:total - 1})].s = {font:{bold:true}, fill:{patternType:'solid', fgColor:{rgb:'BDD7EE'}}};
+  const stCol = {Changed:'FFF200', Removed:'F6C4C4', Added:'C4E8C8'};
+  entries.forEach((e, n) => {
+    const r = 2 + n;
+    paintCell(ws, r, 0, stCol[e.s]);
+    if(e.s === 'Removed'){ for(let c = 2; c < 2 + nB; c++) paintCell(ws, r, c, 'F6C4C4'); }
+    else if(e.s === 'Added'){ for(let c = 2 + nB; c < 2 + nB + nA; c++) paintCell(ws, r, c, 'C4E8C8'); }
+    else {
+      e.jb.forEach(j => paintCell(ws, r, 2 + colsB.indexOf(j), 'FFF200'));
+      e.ja.forEach(j => paintCell(ws, r, 2 + nB + colsA.indexOf(j), 'FFF200'));
+    }
+    paintCell(ws, r, total - 1, 'DDEBF7');
+  });
+  const merges = [];
+  if(nB > 1) merges.push({s:{r:0, c:2}, e:{r:0, c:1 + nB}});
+  if(nA > 1) merges.push({s:{r:0, c:2 + nB}, e:{r:0, c:1 + nB + nA}});
+  ws['!merges'] = merges;
+  const widths = [];
+  for(let c = 0; c < total; c++){
+    let m = 9;
+    [head, ...body].forEach(r => { m = Math.max(m, Math.min(40, String(r[c] === undefined ? '' : r[c]).length + 2)); });
+    widths.push({wch:m});
+  }
+  widths[total - 1] = {wch:12};
+  ws['!cols'] = widths;
+  return ws;
+}
+
+function compare(){
+  const key = $('key').value;
+  const B = records('B', key), A = records('A', key);
+  if(B.missing || A.missing){
+    $('msg').textContent = 'The column "' + key + '" was not found in both files. Pick another column to match by.';
+    return;
+  }
+  const hb = S.B.rows[S.B.h], cols = [];
+  B.hdr.forEach((n, jb) => { if(n === '') return; const ja = A.hdr.indexOf(n); if(ja >= 0) cols.push([jb, ja, String(hb[jb])]); });
+  const cellsB = [], cellsA = [], removed = [], added = [], diffs = [], entries = [];
+  let matched = 0;
+  B.map.forEach((b, id) => {
+    const a = A.map.get(id);
+    if(!a){ removed.push(b.i); diffs.push(['Removed', b.k, '', '', '']); entries.push({s:'Removed', k:b.k, bi:b.i, jb:[], ja:[]}); return; }
+    matched++;
+    const jbs = [], jas = [];
+    cols.forEach(([jb, ja, name]) => {
+      const vb = S.B.rows[b.i][jb], va = S.A.rows[a.i][ja];
+      if(!same(vb, va)){ cellsB.push([b.i, jb]); cellsA.push([a.i, ja]); diffs.push(['Changed', b.k, name, vb, va]); jbs.push(jb); jas.push(ja); }
+    });
+    if(jbs.length) entries.push({s:'Changed', k:b.k, bi:b.i, ai:a.i, jb:jbs, ja:jas});
+  });
+  A.map.forEach((a, id) => { if(!B.map.has(id)){ added.push(a.i); diffs.push(['Added', a.k, '', '', '']); entries.push({s:'Added', k:a.k, ai:a.i, jb:[], ja:[]}); } });
+  const order = {Changed:0, Removed:1, Added:2};
+  diffs.sort((x, y) => order[x[0]] - order[y[0]] || String(x[1]).localeCompare(String(y[1]), undefined, {numeric:true}));
+  entries.sort((x, y) => String(x.k).localeCompare(String(y.k), undefined, {numeric:true}));
+  RPT = {entries, key, kcB:B.kc, kcA:A.kc};
+  const wbR = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbR, makeReport(), 'Discrepancy Report');
+  out = {
+    wbR,
+    wbB: build('B', cellsB, removed, 'F6C4C4', diffs),
+    wbA: build('A', cellsA, added, 'C4E8C8', diffs),
+    nameB: S.B.name.replace(/\.[^.]+$/, '') + ' - highlighted.xlsx',
+    nameA: S.A.name.replace(/\.[^.]+$/, '') + ' - highlighted.xlsx'
+  };
+  const dupCount = new Set([...B.dups, ...A.dups]).size;
+  const stat = (cls, n, label) => '<div class="stat ' + cls + '"><b>' + n + '</b>' + label + '</div>';
+  $('stats').innerHTML = stat('', matched, 'rows matched') + stat('c', cellsB.length, 'changed cells') + stat('r', removed.length, 'removed') + stat('a', added.length, 'added') + stat('', entries.length, 'rows to recount');
+  $('msg').textContent = dupCount ? dupCount + ' code(s) appear more than once and were matched in order of appearance.' : '';
+  $('result').hidden = false;
+}
+
+$('fileB').addEventListener('change', e => load('B', e.target.files[0]));
+$('fileA').addEventListener('change', e => load('A', e.target.files[0]));
+$('go').addEventListener('click', () => { try { compare(); } catch(err){ $('msg').textContent = 'Comparison failed: ' + err.message; } });
+$('dlR').addEventListener('click', () => out && XLSX.writeFile(out.wbR, 'Stocktake discrepancy report.xlsx'));
+$('dlB').addEventListener('click', () => out && XLSX.writeFile(out.wbB, out.nameB));
+$('dlA').addEventListener('click', () => out && XLSX.writeFile(out.wbA, out.nameA));
+</script>
+</body>
+</html>
